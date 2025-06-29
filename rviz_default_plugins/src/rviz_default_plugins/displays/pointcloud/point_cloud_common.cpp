@@ -330,8 +330,14 @@ void PointCloudCommon::insertNewClouds(float point_decay_time, const rclcpp::Tim
 
       cloud_info->cloud_.reset(new rviz_rendering::PointCloud());
       cloud_info->cloud_->setRenderMode(mode);
-      cloud_info->cloud_->addPoints(
-        cloud_info->transformed_points_.begin(), cloud_info->transformed_points_.end());
+      try {
+        cloud_info->cloud_->addPoints(
+            cloud_info->transformed_points_.begin(), cloud_info->transformed_points_.end());
+      } catch (Ogre::Exception &e) {
+        RVIZ_COMMON_LOG_ERROR_STREAM(
+          "Error adding points to point cloud: " << e.getFullDescription());
+        continue;
+      }
       cloud_info->cloud_->setAlpha(alpha_property_->getFloat(), per_point_alpha);
       cloud_info->cloud_->setDimensions(size, size, size);
       cloud_info->cloud_->setAutoSize(auto_size_);
