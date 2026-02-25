@@ -32,7 +32,6 @@
 #ifndef RVIZ_DEFAULT_PLUGINS__DISPLAYS__POINTCLOUD__POINT_CLOUD_TRANSPORT_DISPLAY_HPP_
 #define RVIZ_DEFAULT_PLUGINS__DISPLAYS__POINTCLOUD__POINT_CLOUD_TRANSPORT_DISPLAY_HPP_
 
-#include <iostream>
 #include <map>
 #include <memory>
 #include <set>
@@ -148,13 +147,21 @@ protected:
       std::string base_topic = topic_property_->getTopicStd();
       std::string transport = transport_property_->getStdString();
 
+      auto node = rviz_ros_node_.lock();
+      if (!node) {
+        setStatus(
+          rviz_common::properties::StatusProperty::Error, "Topic",
+          QString("Error subscribing: ROS node is no longer available"));
+        return;
+      }
+
       subscription_ = std::make_shared<point_cloud_transport::SubscriberFilter>();
       subscription_->subscribe(
-        rviz_ros_node_.lock()->get_raw_node(),
+        node->get_raw_node(),
         base_topic,
         transport,
         qos_profile.get_rmw_qos_profile());
-      subscription_start_time_ = rviz_ros_node_.lock()->get_raw_node()->now();
+      subscription_start_time_ = node->get_raw_node()->now();
       subscription_callback_ = subscription_->registerCallback(
         std::bind(
           &PointCloud2TransportDisplay<MessageType>::incomingMessage, this, std::placeholders::_1));
@@ -242,7 +249,7 @@ protected:
       // getLoadableTransports() returns {lookup_name: transport_name} for all
       // transports that can actually be loaded (verified internally).
       auto loadable = loader.getLoadableTransports();
-      for (const auto & [lookup_name, transport_name] : loadable) {
+      for (const auto & [_, transport_name] : loadable) {
         transport_plugin_types_.insert(transport_name);
       }
     } catch (...) {
