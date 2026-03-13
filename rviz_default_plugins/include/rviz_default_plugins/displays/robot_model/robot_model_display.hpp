@@ -132,8 +132,10 @@ protected:
 
   bool has_new_transforms_;      ///< Callback sets this to tell our update function
   ///< it needs to update the transforms
+  bool robot_description_failed_to_load_;
 
   float time_since_last_transform_;
+  float time_since_last_reload_attempt_;
 
   std::string robot_description_;
 

@@ -80,7 +80,9 @@ enum DescriptionSource
 
 RobotModelDisplay::RobotModelDisplay()
 : has_new_transforms_(false),
+  robot_description_failed_to_load_(false),
   time_since_last_transform_(0.0f),
+  time_since_last_reload_attempt_(0.0f),
   transformer_guard_(
     std::make_unique<rviz_default_plugins::transformation::TransformerGuard<
       rviz_default_plugins::transformation::TFFrameTransformer>>(this, "TF"))
@@ -228,6 +230,7 @@ void RobotModelDisplay::updateInertiaVisible()
 
 void RobotModelDisplay::load_urdf()
 {
+  robot_description_failed_to_load_ = false;
   if (!transformer_guard_->checkTransformer()) {
     return;
   }
@@ -243,6 +246,7 @@ void RobotModelDisplay::load_urdf()
 
 void RobotModelDisplay::load_urdf_from_file(const std::string & filepath)
 {
+  robot_description_failed_to_load_ = false;
   std::string content;
   QFile urdf_file(QString::fromStdString(filepath));
   if (urdf_file.open(QIODevice::ReadOnly)) {
@@ -266,6 +270,7 @@ void RobotModelDisplay::load_urdf_from_file(const std::string & filepath)
 
 void RobotModelDisplay::load_urdf_from_string(const std::string & robot_description)
 {
+  robot_description_failed_to_load_ = false;
   robot_description_ = robot_description;
   display_urdf_content();
 }
@@ -280,7 +285,13 @@ void RobotModelDisplay::display_urdf_content()
   }
 
   setStatus(StatusProperty::Ok, "URDF", "URDF parsed OK");
-  robot_->load(descr);
+  try {
+    robot_->load(descr);
+  } catch (Ogre::Exception &e) {
+    setStatus(StatusProperty::Error, "URDF", QString("URDF failed to load for rendering: ") + e.getFullDescription().c_str() + "\nWill retry periodically.");
+    robot_description_failed_to_load_ = true;
+    return;
+  }
   std::stringstream ss;
   for (const auto & name_link_pair : robot_->getLinks()) {
     const std::string err = name_link_pair.second->getGeometryErrors();
@@ -325,6 +336,14 @@ void RobotModelDisplay::update(float wall_dt, float ros_dt)
 {
   if (!transformer_guard_->checkTransformer()) {
     return;
+  }
+
+  if (robot_description_failed_to_load_) {
+    time_since_last_reload_attempt_ += wall_dt;
+    if (time_since_last_reload_attempt_ > 0.5) {
+      display_urdf_content();
+      time_since_last_reload_attempt_ = 0.0f;
+    }
   }
 
   (void) ros_dt;
