@@ -40,8 +40,8 @@
 
 #include "point_cloud_transport/point_cloud_transport.hpp"
 #include "point_cloud_transport/subscriber_filter.hpp"
+#include "rviz_common/message_filter_display.hpp"
 #include "rviz_common/properties/enum_property.hpp"
-#include "rviz_common/ros_topic_display.hpp"
 
 namespace rviz_default_plugins
 {
@@ -49,7 +49,7 @@ namespace displays
 {
 
 template<class MessageType>
-class PointCloud2TransportDisplay : public rviz_common::_RosTopicDisplay
+class PointCloud2TransportDisplay : public rviz_common::MessageFilterDisplay<MessageType>
 {
 // No Q_OBJECT macro here, moc does not support Q_OBJECT in a templated class.
 
@@ -59,13 +59,12 @@ public:
   typedef PointCloud2TransportDisplay<MessageType> PC2RDClass;
 
   PointCloud2TransportDisplay()
-  : messages_received_(0),
-    transport_manually_set_(false),
+  : transport_manually_set_(false),
     programmatic_transport_change_(false)
   {
     QString message_type = QString::fromStdString(rosidl_generator_traits::name<MessageType>());
-    topic_property_->setMessageType(message_type);
-    topic_property_->setDescription(message_type + " topic to subscribe to.");
+    this->topic_property_->setMessageType(message_type);
+    this->topic_property_->setDescription(message_type + " topic to subscribe to.");
 
     // Note: no SLOT here — transport changes are handled in onInitialize().
     transport_property_ = new rviz_common::properties::EnumProperty(
@@ -80,7 +79,7 @@ public:
 */
   void onInitialize() override
   {
-    _RosTopicDisplay::onInitialize();
+    rviz_common::MessageFilterDisplay<MessageType>::onInitialize();
     scanForTransportSubscriberPlugins();
 
     // Refresh the transport list every time the dropdown is opened.
@@ -99,147 +98,77 @@ public:
       [this]() {
         if (!programmatic_transport_change_) {
           transport_manually_set_ = true;
-          resetSubscription();
+          this->resetSubscription();
         }
       });
-  }
-
-  ~PointCloud2TransportDisplay() override
-  {
-    unsubscribe();
-  }
-
-  void reset() override
-  {
-    Display::reset();
-    messages_received_ = 0;
-  }
-
-  void setTopic(const QString & topic, const QString & datatype) override
-  {
-    (void) datatype;
-    topic_property_->setString(topic);
   }
 
 protected:
   void updateTopic() override
   {
+    rviz_common::MessageFilterDisplay<MessageType>::updateTopic();
     // Topic changed: reset manual flag so we can auto-select again.
     transport_manually_set_ = false;
     fillTransportOptionList();
-    resetSubscription();
   }
 
-  virtual void subscribe()
+  void subscribe() override
   {
-    if (!isEnabled()) {
+    if (!this->isEnabled()) {
       return;
     }
 
-    if (topic_property_->isEmpty()) {
-      setStatus(
+    if (this->topic_property_->isEmpty()) {
+      this->setStatus(
         rviz_common::properties::StatusProperty::Error, "Topic",
         QString("Error subscribing: Empty topic name"));
       return;
     }
 
     try {
-      std::string base_topic = topic_property_->getTopicStd();
+      std::string base_topic = this->topic_property_->getTopicStd();
       std::string transport = transport_property_->getStdString();
 
-      auto node = rviz_ros_node_.lock();
+      auto node = this->rviz_ros_node_.lock();
       if (!node) {
-        setStatus(
+        this->setStatus(
           rviz_common::properties::StatusProperty::Error, "Topic",
           QString("Error subscribing: ROS node is no longer available"));
         return;
       }
 
-      subscription_ = std::make_shared<point_cloud_transport::SubscriberFilter>();
-      subscription_->subscribe(
+      subscriber_filter_ = std::make_shared<point_cloud_transport::SubscriberFilter>();
+      subscriber_filter_->subscribe(
         node->get_raw_node(),
         base_topic,
         transport,
-        qos_profile.get_rmw_qos_profile());
-      subscription_start_time_ = node->get_raw_node()->now();
-      subscription_callback_ = subscription_->registerCallback(
-        std::bind(
-          &PointCloud2TransportDisplay<MessageType>::incomingMessage, this, std::placeholders::_1));
-      setStatus(rviz_common::properties::StatusProperty::Ok, "Topic", "OK");
+        this->qos_profile.get_rmw_qos_profile());
+      this->subscription_start_time_ = node->get_raw_node()->now();
+      this->tf_filter_ =
+        std::make_shared<tf2_ros::MessageFilter<MessageType,
+          rviz_common::transformation::FrameTransformer>>(
+        *this->context_->getFrameManager()->getTransformer(),
+        this->fixed_frame_.toStdString(),
+        static_cast<uint32_t>(this->message_queue_property_->getInt()),
+        node->get_raw_node());
+      this->tf_filter_->connectInput(*subscriber_filter_);
+      this->tf_filter_->registerCallback(
+        [this](const typename MessageType::ConstSharedPtr msg) {
+          this->messageTaken(msg);
+        });
+      this->setStatus(rviz_common::properties::StatusProperty::Ok, "Topic", "OK");
     } catch (rclcpp::exceptions::InvalidTopicNameError & e) {
-      setStatus(
+      this->setStatus(
         rviz_common::properties::StatusProperty::Error, "Topic",
         QString("Error subscribing: ") + e.what());
     }
   }
 
-  void transformerChangedCallback() override
-  {
-    resetSubscription();
-  }
-
-  void resetSubscription()
-  {
-    unsubscribe();
-    reset();
-    subscribe();
-    context_->queueRender();
-  }
-
   virtual void unsubscribe()
   {
-    subscription_.reset();
+    rviz_common::MessageFilterDisplay<MessageType>::unsubscribe();
+    subscriber_filter_.reset();
   }
-
-  void onEnable() override
-  {
-    subscribe();
-  }
-
-  void onDisable() override
-  {
-    unsubscribe();
-    reset();
-  }
-
-/// Incoming message callback.
-/**
-* Checks if the message pointer
-* is valid, increments messages_received_, then calls
-* processMessage().
-*/
-  void incomingMessage(const typename MessageType::ConstSharedPtr msg)
-  {
-    if (!msg) {
-      return;
-    }
-
-    ++messages_received_;
-    QString topic_str = QString::number(messages_received_) + " messages received";
-    // Append topic subscription frequency if we can lock rviz_ros_node_.
-    std::shared_ptr<rviz_common::ros_integration::RosNodeAbstractionIface> node_interface =
-      rviz_ros_node_.lock();
-    if (node_interface != nullptr) {
-      const double duration =
-        (node_interface->get_raw_node()->now() - subscription_start_time_).seconds();
-      const double subscription_frequency =
-        static_cast<double>(messages_received_) / duration;
-      topic_str += " at " + QString::number(subscription_frequency, 'f', 1) + " hz.";
-    }
-    setStatus(
-      rviz_common::properties::StatusProperty::Ok,
-      "Topic",
-      topic_str);
-
-    processMessage(msg);
-  }
-
-
-/// Implement this to process the contents of a message.
-/**
-* This is called by incomingMessage().
-*/
-  virtual void processMessage(typename MessageType::ConstSharedPtr msg) = 0;
 
   /// Scan for available point_cloud_transport subscriber plugins.
   void scanForTransportSubscriberPlugins()
@@ -270,12 +199,12 @@ protected:
     // Always add "raw" first.
     transport_property_->addOptionStd("raw");
 
-    auto node = rviz_ros_node_.lock();
+    auto node = this->rviz_ros_node_.lock();
     if (!node) {
       return;
     }
 
-    std::string base_topic = topic_property_->getTopicStd();
+    std::string base_topic = this->topic_property_->getTopicStd();
     if (base_topic.empty()) {
       return;
     }
@@ -330,12 +259,7 @@ protected:
     }
   }
 
-  uint32_t messages_received_;
-  rclcpp::Time subscription_start_time_;
-
-  std::shared_ptr<point_cloud_transport::SubscriberFilter> subscription_;
-  message_filters::Connection subscription_callback_;
-
+  std::shared_ptr<point_cloud_transport::SubscriberFilter> subscriber_filter_;
   rviz_common::properties::EnumProperty * transport_property_;
   std::set<std::string> transport_plugin_types_;
   bool transport_manually_set_;
