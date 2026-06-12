@@ -233,7 +233,6 @@ void RobotModelDisplay::updateInertiaVisible()
 
 void RobotModelDisplay::load_urdf()
 {
-  robot_description_failed_to_load_ = false;
   if (!transformer_guard_->checkTransformer()) {
     return;
   }
@@ -249,7 +248,6 @@ void RobotModelDisplay::load_urdf()
 
 void RobotModelDisplay::load_urdf_from_file(const std::string & filepath)
 {
-  robot_description_failed_to_load_ = false;
   std::string content;
   std::ifstream urdf_file;
   urdf_file.open(filepath, std::ifstream::in);
@@ -276,7 +274,6 @@ void RobotModelDisplay::load_urdf_from_file(const std::string & filepath)
 
 void RobotModelDisplay::load_urdf_from_string(const std::string & robot_description)
 {
-  robot_description_failed_to_load_ = false;
   robot_description_ = robot_description;
   display_urdf_content();
 }
@@ -291,6 +288,7 @@ void RobotModelDisplay::display_urdf_content()
   }
 
   setStatus(StatusProperty::Ok, "URDF", "URDF parsed OK");
+  robot_description_failed_to_load_ = false;
   try {
     robot_->load(descr);
   } catch (Ogre::Exception &e) {
